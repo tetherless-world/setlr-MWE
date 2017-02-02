@@ -18,7 +18,8 @@ You will need to provide the following items:
 
 A blank Semantic Data Dictionary template may become part of this repo in the future
 
-=== Configuration:
+#Configuration
+
 [Prefixes] allows you to designate the prefixes associated with your data transformation, and resulting linked data.
 - transform_prefix is for provenance purposes
 - base_uri is for coining URI's for the final linked data
