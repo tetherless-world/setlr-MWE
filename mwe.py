@@ -166,6 +166,23 @@ tl_dict = {}
 for tlrow in tl.itertuples():
 	tl_dict[tlrow[5]] = tlrow[1]
 
+#codebook
+cb_dict = {}
+# (0:index), 1:Column, [2:Value OR 3:Code], 4:Full Name, 5:Class
+for cbrow in cb.itertuples():
+	column_key = cbrow[1]
+	if column_key not in cb_dict:
+		cb_dict[column_key] = {}
+	if pd.notnull(cbrow[2]): #value is a number
+		val_key = str(int(cbrow[2]))
+	elif pd.notnull(cbrow[3]): #value is a code
+		val_key = cbrow[3].strip()
+	else: #why are we here?
+		print('extra row in codebook?')
+		continue 
+	new_value = (cbrow[4], cbrow[5])
+	cb_dict[column_key][val_key] = new_value
+
 #0:index 1:column 2:label 3:attribute 4:attributeOf 5:entity-conj 6:attr-conj 7:time 8:entity 9:role 10:relation 11:inRelationTo 12:hasUnit 13:datatype
 for row in dct.itertuples():
 	toAdd = ''
@@ -184,18 +201,13 @@ for row in dct.itertuples():
 			rel = row[10]
 		indent = '\t'*2
 		toAdd = cbthing.format(i=indent, rel=rel)
-	# (0:index), 1:Column, [2:Value OR 3:Code], 4:Full Name, 5:Class
-		for cbrow in cb.itertuples():
-			if pd.notnull(cbrow[1]) and cbrow[1] == col:
-				val = ''
-				if pd.notnull(cbrow[2]): #the value is a number
-					val = str(int(cbrow[2]))
-				else: #the value is a code
-					val = cbrow[3].strip()
-				indent = '\t'*3
-				toAdd += cbtype.format(i=indent, col=col, atrconj='attr', code=val, atr=attribute, cls=cbrow[5], lbl=cbrow[4])
-			else:
-				continue
+		for k, v in subdict.items():
+			if k.isdigit():
+				col_f = col + '|int'
+			else: #the value is a code
+				val = k.strip()
+			indent = '\t'*3
+			toAdd += cbtype.format(i=indent, col=col, col_f=col_f, atrconj='attr', code=k, atr=attribute, cls=subdict[k][1], lbl=subdict[k][0])
 		toAdd = toAdd[:-1] #slice off last comma
 		toAdd += '\n\t\t],'
 	
@@ -218,7 +230,7 @@ for row in dct.itertuples():
 	#EVERYTHING NOT IN THE CODEBOOK
 	elif pd.notnull(row[3]):
 		if pd.notnull(row[4]): 
-			if row[4] == "sio:Human":
+			if row[4] == 'sio:Human':
 			# the subject of the row is the child
 				col = row[1]
 				attribute = row[3]
