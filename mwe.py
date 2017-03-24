@@ -81,8 +81,8 @@ def main():
 #	with open("testCB.json","w") as f:
 #		json.dump(theCodebook,f)
 	#turtle.write(theTransform)
-	test_sb = writeTransformValue(theCodebook,theSDD,theTimeline)
-	print test_sb
+#	test_sb = writeTransformValue(theCodebook,theSDD,theTimeline)
+#	print test_sb
 	
 	theLoad = writeLoad(out_fname)
 	#turtle.write(theLoad)
