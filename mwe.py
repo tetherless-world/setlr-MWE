@@ -1,13 +1,14 @@
 import pandas as pd
 import numpy as np
 import configparser
+import json, math
 import re
 import sys
 
 
 def main():
 	if len(sys.argv) < 2:
-		print("USAGE: python mwe.py <config.ini>")
+		print("USAGE: python subj_mwe.py <config.ini>")
 		sys.exit()
 
 	#file setup and configuration
@@ -53,12 +54,12 @@ def main():
 '''
 
 	prefixes = prefix_template.format(transform = config['Prefixes']['transform_prefix'])
-	turtle.write(prefixes)
+	#turtle.write(prefixes)
 	
 	#WRITE DATA FILE EXTRACT
 	df = config['Data Files']['data_file']
 	extract = writeDataFileExtract(df)
-	turtle.write(extract)
+	#turtle.write(extract)
 
 	#ontology
 	o = ''':ontology a owl:Ontology;
@@ -67,16 +68,24 @@ def main():
 \t\tprov:used <{ontology}>;
 \t].\n\n'''
 	ont = o.format(ontology=ontpath)
-	turtle.write(ont)
+	#turtle.write(ont)
 
-	tfcontext = writeTransformContext(config['Prefixes']['base_uri'])
-	turtle.write(tfcontext)
+	base_uri = config['Prefixes']['base_uri']
+	tfcontext = writeTransformContext(base_uri)
+	#turtle.write(tfcontext)
 
-	theTransform = writeTransformValue(cb, dct, tl)
-	turtle.write(theTransform)
+	#theTransform = writeTransformValue(cb, dct, tl)
+	theCodebook,theSDD,theTimeline = compileSDD(cb, dct, tl)
+	with open("testSDD.json","w") as f:
+		json.dump(theSDD,f)
+#	with open("testCB.json","w") as f:
+#		json.dump(theCodebook,f)
+	#turtle.write(theTransform)
+	test_sb = writeTransformValue(theCodebook,theSDD,theTimeline)
+	print test_sb
 	
 	theLoad = writeLoad(out_fname)
-	turtle.write(theLoad)
+	#turtle.write(theLoad)
 	turtle.close()
 #/MAIN
 
@@ -109,6 +118,7 @@ def writeDataFileExtract(fname):
 	return scriptbuffer
 #/WRITE DATA FILE EXTRACT
 
+
 #WRITE TRANSFORM CONTEXT
 def writeTransformContext(base_uri):
 	scriptbuffer = ''':transform a void:Dataset, dcat:Dataset, setl:Persisted;
@@ -131,220 +141,131 @@ def writeTransformContext(base_uri):
 #/WRITE TRANSFORM CONTEXT
 
 
-#WRITE TRANSFORM VALUE
+#COMPILE SDD
+def compileSDD(codebook, dictionary, timeline):
+# TIMEPOINTS NEW
+# (0:index) 1:Name 2:Start 3:End 4:Unit 5:Type
+	tl_dict = {}
+	for tlrow in timeline.itertuples():
+		tl_dict[tlrow[1]] = tlrow[5]
+
+# CODEBOOK
+# (0:index) 1:Column 2:Value 3:Class 4:New Term 5:Working Column (From Original DD) 6:Notes	
+	cb_dict = {}
+	current_var = ''
+	for cbrow in codebook.itertuples():
+		if pd.notnull(cbrow[1]): #reset current var if we're on a new one
+			current_var = cbrow[1]
+		if current_var not in cb_dict: #if this var isn't in the codebook yet, add a spot for it
+			cb_dict[current_var] = {}
+		if pd.isnull(cbrow[2]) and pd.isnull(cbrow[3]):
+			print('WARN: blank row: {}'.format(cbrow[0]))
+			continue
+		value_key = str(int(cbrow[2]))
+		# (label, uri)
+		cb_dict[current_var][value_key] = {}
+		cb_dict[current_var][value_key]['sio:hasValue'] = cbrow[5]
+		cb_dict[current_var][value_key]['@type'] = cbrow[3]
+
+	numrows = dictionary.shape[0]
+
+	sdd = {}
+
+	# MAIN PARSING LOOP FOR DATA DICTIONARY
+	for row in dictionary.itertuples():
+		if pd.isnull(row[1]):
+			print("WARN: unspecified variable row in SDD {}".format(row[0]))
+			continue
+	# row is META
+#	0:index ... 8:Entity 9:Role 10:Relation 11:inRelationTo 12:NewConcept ...
+		if row[1].startswith('??'):
+			conc = row[1]
+			# add new concept to dictionary if we don't have it yet
+			if conc not in sdd: 
+				if pd.isnull(conc):
+					conc = 'NULL'
+				sdd[conc] = {}
+			# entity type needs to not be null
+			if pd.notnull(row[8]):
+				sdd[conc]['@type'] = row[8]
+			else:
+				print('WARN: entity {} missing type'.format(row[1]))
+			# it's okay if there's no role
+			if pd.notnull(row[9]):
+				sdd[conc]['sio:hasRole'] = row[9]
+			# specify entity relation if there is one
+			if pd.notnull(row[11]):
+				if pd.notnull(row[10]):
+					sdd[conc][row[11]] = row[10]
+				else: #default relation
+					sdd[conc][row[11]] = 'sio:isRelatedTo'
+	#/META
+
+	# row is REGULAR
+# REGULAR 
+#	0:index 1:Column 2:LABEL 3:Definition 4:Attribute 5:attributeOf 6:Unit 7:Time ... 10:Relation 11:inRelationTo 12:NewConcept 13:wasDerivedFrom 14:wasGeneratedBy
+		else:
+			conc = row[5] #check for the meta row
+			#add new concept to dictionary if we don't have it yet
+			attr = 'sio:hasAttribute'
+			if pd.notnull(row[10]):
+				attr = row[10]
+			if conc not in sdd: 
+				if pd.isnull(conc):
+					conc = 'NULL'
+				sdd[conc] = {}
+			if attr not in sdd[conc]:
+				sdd[conc][attr] = {}
+			if pd.isnull(row[1]):
+				print('WARN: unspecified variable row in SDD: {}'.format(row[0]))
+				continue
+			col_name = row[1]
+			sdd[conc][attr][col_name] = {}
+			if pd.notnull(row[4]):
+				sdd[conc][attr][col_name]['rdfs:subClassOf'] = row[4]
+			else:
+				print("WARN: untyped variable {}".format(row[1]))
+			if pd.notnull(row[2]):
+				sdd[conc][attr][col_name]['rdfs:label'] = row[2]
+			if pd.notnull(row[6]):
+				sdd[conc][attr][col_name]['sio:hasUnit'] = row[6]
+			if pd.notnull(row[7]):
+				sdd[conc][attr][col_name]['sio:measuredAt'] = row[7]
+			
+	#/REGULAR
+	return cb_dict, sdd, tl_dict
+#/COMPILESDD
+
+
+#WRITETRANSFORMVALUE
 def writeTransformValue(codebook, dictionary, timeline):
-	
 	#transform (prov:value is the transform)
 	scriptbuffer = "\t\tprov:value '''[{\n"
 
 	# the semantic data dictionary
 	scriptbuffer += '''\t"@id": "dataset:{{row.STUDYID}}",
 \t"@graph": [{
-\t\t"@id": "dataset:{{row.STUDYID}}/{{row.SUBJID|int}}",
-\t\t"@type": "sio:Human",
 '''
-
-	#.format(column, attribute)
-	#i default=2
-	attrstart_template = '''
-{i}"{rel}": [
-{i}{{
-{i}\t"@id": "dataset:{{{{row.STUDYID}}}}/{{{{row.SUBJID|int}}}}{tail}",
-{i}\t"@type": ["sio:Attribute", "hbgd:HBGDkiConcept", "hbgd:Variable", "{attr}" ],
-{i}\t"rdfs:label": "{label}"'''
-
-	#i default=3
-	measured_at_template = ''',\n{i}"sio:measuredAt" : [
-{i}{{
-{i}\t"@id":"dataset:{{{{row.STUDYID}}}}/{{{{row.SUBJID|int}}}}/timepoint/{timepoint}"
-{i}}}]'''
-
-
-	#i default=2
-	other_subject = '''
-{i}"{relation}" :[
-{i}{{
-{i}\t"@id": "dataset:{{{{row.STUDYID}}}}/{{{{row.SUBJID|int}}}}{tail}",
-{i}\t"@type": "{tp}",'''
-
-	other_subject_tail = '''/{entconj}/{part}{at}'''
-	attr_tail = '''/{atrconj}/{col}'''
-
-	#i default=2
-	close = '''
-{i}}}],'''
-
-	#i default=2
-	cbthing = '''
-{i}"{rel}" :[
-{i}'''
-
-	#i default=3
-	cbtype = '''\t{{
-{i}\t"@if": "{{{{row.{col_f}}}}} == '{code}'",
-{i}\t"@id": "dataset:{{{{row.STUDYID}}}}/{{{{row.SUBJID|int}}}}/{atrconj}/{col}/{{{{row.{col_f}}}}}",
-{i}\t"@type": ["{atr}", "{cls}"],
-{i}\t"sio:hasValue": {{ "@value": "{lbl}" }}
-{i}}},'''
-
-	#i default=2
-	yn = '''
-{i}"{rel}" :[
-{i}\t{{
-{i}\t"@if": "{{{{row.{col}|int}}}} == '1'",
-{i}\t"@id": "dataset:{{{{row.STUDYID}}}}/{{{{row.SUBJID|int}}}}/{atrconj}/{col}",
-{i}\t"@type": ["sio:Attribute", "hbgd:HBGDkiConcept", "hbgd:Variable","{atr}"],
-{i}\t"rdfs:label": "{lbl}"
-{i}\t}}],'''
-
-	u =''',\n{i}"sio:hasUnit": {{ "@value": "{unit}" }}'''
-	hv = ''',\n{i}"sio:hasValue": {{ "@value": "{{{{row.{col}}}}}", "@type": "{datatype}" }}'''
-
-	#timepoints
-	tl_dict = {}
-	#0:index 1:name 2:start 3:end 4:unit 5:type
-	for tlrow in timeline.itertuples():
-		tl_dict[tlrow[5]] = tlrow[1]
-
-	#codebook
-	cb_dict = {}
-	# (0:index), 1:Column, [2:Value OR 3:Code], 4:Full Name, 5:Class
-	for cbrow in codebook.itertuples():
-		column_key = cbrow[1]
-		#add new variable to dictionary if we don't have it yet
-		if column_key not in cb_dict: 
-			cb_dict[column_key] = {}
-		if pd.notnull(cbrow[2]): #value is a number
-			val_key = str(int(cbrow[2]))
-		elif pd.notnull(cbrow[3]): #value is a code
-			val_key = cbrow[3].strip()
-		else: #why are we here?
-			print('WARN: extra row in codebook?')
-			continue 
-		new_value = (cbrow[4], cbrow[5])
-		cb_dict[column_key][val_key] = new_value
-
-	numrows = dictionary.shape[0]
-
-	#0:index 1:column 2:label 3:attribute 4:attributeOf 5:entity-conj 6:attr-conj 7:time 8:entity 9:role 10:relation 11:inRelationTo 12:hasUnit 13:datatype
-	# MAIN PARSING LOOP FOR DATA DICTIONARY
-	for row in dictionary.itertuples():
-		toAdd = ''
-		indent = ''
-		#CODEBOOK HANDLING
-		if pd.notnull(row[13]) and row[13] == 'CODEBOOK':
-			col = row[1]
-			col_f = col
-			attribute = ''
-			if pd.notnull(row[3]):
-				attribute = row[3]
-			label = row[2]
-			rel = ''
-			if pd.isnull(row[10]):
-				rel = 'sio:hasAttribute'
-			else:
-				rel = row[10]
-			indent = '\t'*2
-			toAdd = cbthing.format(i=indent, rel=rel)
-			subdict = cb_dict[col]
-			for k, v in subdict.items():
-				if k.isdigit():
-					col_f = col + '|int'
-				else: #the value is a code
-					val = k.strip()
-				indent = '\t'*3
-				toAdd += cbtype.format(i=indent, col=col, col_f=col_f, atrconj='attr', code=k, atr=attribute, cls=subdict[k][1], lbl=subdict[k][0])
-			toAdd = toAdd[:-1] #slice off last comma
-			toAdd += '\n\t\t],'
-	
-		#Y/N FLAG HANDLING
-		elif pd.notnull(row[13]) and row[13] == 'YN':
-			col = row[1]
-			attribute = ''
-			if pd.notnull(row[3]):
-				attribute = row[3]
-			label = row[2]
-			rel = 'sio:hasAttribute'
-			ac = 'attr'
-			if pd.notnull(row[10]):
-				rel = row[10]
-			if pd.notnull(row[6]):
-				ac = row[6]
-			indent = '\t'*2
-			toAdd = yn.format(i=indent, rel=rel, col=col, atrconj=ac, code=val, atr=attribute, lbl=label)
-	
-		#EVERYTHING NOT IN THE CODEBOOK
-		elif pd.notnull(row[3]):
-			if pd.notnull(row[4]): 
-				if row[4] == "sio:Human":
-				# the subject of the row is the child
-					col = row[1]
-					attribute = row[3]
-					label = row[2]
-					ac = 'attr' #attribute conjunction
-					if pd.notnull(row[6]):
-						ac = row[6]
-					if pd.isnull(row[10]):
-						rel = 'sio:hasAttribute'
-					else:
-						rel = row[10]
-					t = attr_tail.format(atrconj=ac, col=col)
-					if pd.notnull(row[6]) and row[6] == 'loc':
-							t = attr_tail.format(atrconj=ac, col='{{{{row.{c}|int}}}}'.format(c=col))
-					indent = '\t'*2
-					toAdd = attrstart_template.format(i=indent, rel=rel, tail=t, attr=attribute, label=label)
-					if pd.notnull(row[7]):
-						indent = '\t'*3
-						toAdd += measured_at_template.format(i=indent, timepoint=tl_dict[row[7]])
-					indent = '\t'*3
-					if pd.isnull(row[13]):
-						dt = ''
-					else:
-						dt = row[13]
-					if pd.notnull(row[12]):
-						toAdd += u.format(i=indent, unit=row[12])
-					toAdd += hv.format(i=indent, col=col, datatype=dt)
-					indent = '\t'*2
-					toAdd += close.format(i=indent)
-				else:
-				# the subject of the row is something else
-					if pd.isnull(row[10]):
-						continue
-					rel = row[10]
-					col = row[1]
-					attribute = row[3]
-					label = row[2]
-					#entity conjunction
-					ec = ''
-					if pd.notnull(row[5]):
-						ec = row[5]
-					#attribute conjunction
-					ac = 'attr' 
-					if pd.notnull(row[6]):
-						ac = row[6]
-					plabel = re.split('\W+', row[4])[-1]
-					indent = '\t'*2
-					toAdd = other_subject.format(i=indent, relation=rel, tail=other_subject_tail.format(entconj=ec, part=plabel, at=''), tp=row[4])
-					indent = '\t'*3
-					toAdd += attrstart_template.format(i=indent, rel='sio:hasAttribute', tail=other_subject_tail.format(entconj=ec, part=plabel, at=attr_tail.format(atrconj=ac,col=col)), attr=attribute, label=label)
-					if pd.notnull(row[7]):
-						indent = '\t'*4
-						toAdd += measured_at_template.format(i=indent, timepoint=tl_dict[row[7]])
-					indent = '\t'*4
-					if pd.isnull(row[13]):
-						dt = ''
-					else:
-						dt = row[13]
-					if pd.notnull(row[12]):
-						toAdd += u.format(i=indent, unit=row[12])
-					indent = '\t'*3
-					toAdd += close.format(i=indent)[:-1]
-					indent = '\t'*2
-					toAdd += close.format(i=indent)				
-		if row[0] == (numrows-1):
-			toAdd = toAdd[:-1]
-		scriptbuffer += toAdd
-	# /MAIN PARSING LOOP FOR DATA DICTIONARY
+	for entity in dictionary.items():
+		subj_base_uri = "dataset:{{row.STUDYID}}/{{row.SUBJID|int}}"
+		if entity == '??subject':
+			scriptbuffer += '\t\t"@id": {},\n'.format(subj_base_uri)
+		elif entity == 'NULL':
+			#print(WARN: orphaned variables exist)
+			continue
+		elif entity == '??study':
+			continue
+		else:
+			rel = entity['??subject']
+			conj = {'sio:hasPart' : '/part/',
+							'sio:isConnectedTo' : '/part/',
+							'sio:hasTarget' : '/attr/',
+							'sio:hasParticipant' : '/attr/',
+							'sio:isRelatedTo' : '/rel/' }
+			piece = conj.get(rel, '/attr/')
+			etype = entity['@type'].split(['/:#'])[-1]
+			scriptbuffer += '\t\t"@id": {},\n'.format(subj_base_uri + conj[rel] + etype)
+			
 
 	cl = '''
 	\t}]
@@ -354,35 +275,8 @@ def writeTransformValue(codebook, dictionary, timeline):
 	scriptbuffer += cl
 	scriptbuffer += "\n\n"
 	return scriptbuffer
-#/WRITE TRANSFORM VALUE
+#/WRITETRANSFORMVALUE
 
 
-#WRITE LOAD
-def writeLoad(fname):
-	suffix = fname.split('.')[-1].lower()
-	output_filetypes = {
-				"rdf" : '"default", "application/rdf+xml", "text/rdf"',
-				"xml" : '"default", "application/rdf+xml", "text/rdf"',
-				"ttl" : '"text/turtle", "application/turtle", "application/x-turtle"',
-				"nt" : "text/plain",
-				"n3" : "text/n3",
-				"trig" : "application/trig",
-				"json" : "application/json" }
-	try:
-		ftype = output_filetypes[suffix]
-	except KeyError:
-		print('Invalid or unsupported output type: ' + fname)
-		sys.exit()
-	scriptbuffer=''
-	ld = '''<{name}> a pv:File;
-\tdcterms:format {ftype};
-\tprov:wasGeneratedBy [
-\t\ta setl:Load;
-\t\tprov:used :transform ;
-\t].'''
-	load = ld.format(name=fname, ftype=ftype)
-	scriptbuffer += load
-	return scriptbuffer
-#/writeLoad()
 
 if __name__ == "__main__": main()
