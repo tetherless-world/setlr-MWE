@@ -54,12 +54,12 @@ def main():
 '''
 
 	prefixes = prefix_template.format(transform = config['Prefixes']['transform_prefix'])
-	#turtle.write(prefixes)
+	turtle.write(prefixes)
 	
 	#WRITE DATA FILE EXTRACT
 	df = config['Data Files']['data_file']
 	extract = writeDataFileExtract(df)
-	#turtle.write(extract)
+	turtle.write(extract)
 
 	#ontology
 	o = ''':ontology a owl:Ontology;
@@ -68,24 +68,28 @@ def main():
 \t\tprov:used <{ontology}>;
 \t].\n\n'''
 	ont = o.format(ontology=ontpath)
-	#turtle.write(ont)
+	turtle.write(ont)
 
 	base_uri = config['Prefixes']['base_uri']
 	tfcontext = writeTransformContext(base_uri)
-	#turtle.write(tfcontext)
+	turtle.write(tfcontext)
 
 	#theTransform = writeTransformValue(cb, dct, tl)
 	theCodebook,theSDD,theTimeline = compileSDD(cb, dct, tl)
+#	for concept in theSDD:
+#		print concept
+#	print theSDD
 	with open("testSDD.json","w") as f:
 		json.dump(theSDD,f)
 #	with open("testCB.json","w") as f:
 #		json.dump(theCodebook,f)
-	#turtle.write(theTransform)
-#	test_sb = writeTransformValue(theCodebook,theSDD,theTimeline)
-#	print test_sb
+#	with open("testTP.json","w") as f:
+#		json.dump(theTimeline,f)
+	test_sb = writeTransformValue(theCodebook,theSDD,theTimeline)
+	turtle.write(test_sb)
 	
 	theLoad = writeLoad(out_fname)
-	#turtle.write(theLoad)
+	turtle.write(theLoad)
 	turtle.close()
 #/MAIN
 
@@ -223,8 +227,8 @@ def compileSDD(codebook, dictionary, timeline):
 			sdd[conc][attr][col_name] = {}
 			if pd.notnull(row[4]):
 				sdd[conc][attr][col_name]['rdfs:subClassOf'] = row[4]
-			else:
-				print("WARN: untyped variable {}".format(row[1]))
+#			else:
+#				print("WARN: untyped variable {}".format(row[1]))
 			if pd.notnull(row[2]):
 				sdd[conc][attr][col_name]['rdfs:label'] = row[2]
 			if pd.notnull(row[6]):
@@ -240,43 +244,254 @@ def compileSDD(codebook, dictionary, timeline):
 #WRITETRANSFORMVALUE
 def writeTransformValue(codebook, dictionary, timeline):
 	#transform (prov:value is the transform)
+	numents = len(dictionary)
 	scriptbuffer = "\t\tprov:value '''[{\n"
 
 	# the semantic data dictionary
-	scriptbuffer += '''\t"@id": "dataset:{{row.STUDYID}}",
-\t"@graph": [{
+	scriptbuffer += '''\t"@id": "dataset:{{row.get('STUDYID')}}",
+\t"@graph": [
 '''
-	for entity in dictionary.items():
-		subj_base_uri = "dataset:{{row.STUDYID}}/{{row.SUBJID|int}}"
-		if entity == '??subject':
-			scriptbuffer += '\t\t"@id": {},\n'.format(subj_base_uri)
-		elif entity == 'NULL':
-			#print(WARN: orphaned variables exist)
-			continue
-		elif entity == '??study':
-			continue
-		else:
-			rel = entity['??subject']
-			conj = {'sio:hasPart' : '/part/',
-							'sio:isConnectedTo' : '/part/',
-							'sio:hasTarget' : '/attr/',
-							'sio:hasParticipant' : '/attr/',
-							'sio:isRelatedTo' : '/rel/' }
-			piece = conj.get(rel, '/attr/')
-			etype = entity['@type'].split(['/:#'])[-1]
-			scriptbuffer += '\t\t"@id": {},\n'.format(subj_base_uri + conj[rel] + etype)
-			
+	#TEMPLATES LIVE HERE
+	conj = {'sio:isPartOf' : '/part/',
+					'sio:isConnectedTo' : '/part/',
+					'sio:hasTarget' : '/attr/',
+					'sio:hasParticipant' : '/attr/',
+					'sio:existsAt' : '/timepoint/', #fix VISIT stuff
+					'sio:isRelatedTo' : '/rel/' }
+	tp = {'??birth' : '1',
+				'??visit' : "{{row.get('VISIT')}}",
+				'??preganncy' : 'EFO_0002950'}
+	subj_template ='''\t{{
+{i}"@id": "{uri}",
+{i}"@type" : "{tp}",
+'''
+	entity_template = '''\t{{
+{i}{entcond}
+{i}"@id": "{uri}",
+{i}"@type" : "{tp}",
+{i}"{rel}" : "{subj}",
+'''
+	entity_conditional = '''{c}\'{prop}\' in row'''
 
+	relation_template = '''{i}"{rel}": [
+{i}{{
+{i}\t"@if": "'{col}' in row",
+{i}\t"@id": "dataset:{{{{row['STUDYID']}}}}/{{{{row['SUBJID']|int}}}}/attr/{col}",
+{i}\t"@type": ["sio:Attribute", "hbgd:HBGDkiConcept", "hbgd:Variable", "{attr}" ],
+{i}\t"rdfs:label": "{label}"{m_at}{unit}{value}
+{i}}}]'''
+
+	unit_template =''',\n{i}\t"sio:hasUnit": {{ "@value": "{unit}" }}'''
+
+	hasv_template = ''',\n{i}\t"sio:hasValue": {{ "@value": "{{{{row['{col}']}}}}" }}'''
+
+	mat_template = ''',\n{i}\t"sio:measuredAt" : [{{
+{i}\t\t"@id":"dataset:{{{{row['STUDYID']}}}}/{{{{row['SUBJID']|int}}}}/timepoint/{timepoint}"
+{i}\t}}]'''
+
+#	cl_temp = '''
+#{i}}}]'''
 	cl = '''
-	\t}]
-	}]\'\'\'
-	\t].
-	'''
+\t]
+}]\'\'\'
+\t].
+'''
+
+	numEnts = len(dictionary.items())
+	countEnts = 0
+	for entity,vals in dictionary.items():
+		countEnts += 1
+		subj_base_uri = "dataset:{{row.STUDYID}}/{{row.SUBJID|int}}"
+#SAD VARIABLES :(((
+		if entity == 'NULL':
+			#print(WARN: orphaned variables exist)
+			if countEnts == numEnts:
+				scriptbuffer = scriptbuffer[:-2] + '\n'				
+			continue
+#WRITE THE STUDY
+		elif entity == '??study':
+			if countEnts == numEnts:
+				scriptbuffer = scriptbuffer[:-2] + '\n'				
+			continue
+#WRITE THE SUBJECT
+		elif entity == '??subject':
+			i = '\t'*2
+			scriptbuffer += subj_template.format(i=i, uri=subj_base_uri, tp=vals['@type'])
+			numRels = len(vals)
+			countRels = 0
+			for rel in vals.keys():
+				if rel in {'??subject', '@type', 'sio:hasRole'}:
+					countRels += 1
+					if countRels == numRels:
+						scriptbuffer = scriptbuffer[:-2] + '\n'
+					continue
+				else:
+					countRels += 1
+					numStuff = len(vals[rel])
+					countStuff = 0
+					for var, deets in vals[rel].items():
+						countStuff += 1
+						if var not in codebook.keys():
+							i = '\t'*2
+							attr = ''
+							label = ''
+							unit = ''
+							hasv = hasv_template.format(i=i, col=var)
+							mat = ''
+							if 'rdfs:subClassOf' in deets.keys():
+								attr = str(deets['rdfs:subClassOf'])
+							if 'rdfs:label' in deets.keys():
+								label = str(deets['rdfs:label'])
+							if 'sio:hasUnit' in deets.keys():
+								unit = unit_template.format(i=i, unit=str(deets['sio:hasUnit']))
+							if 'sio:measuredAt' in deets.keys():
+								mat = mat_template.format(i=i, timepoint=tp.get(str(deets['sio:measuredAt']), 'UNKNOWN'))
+							scriptbuffer += relation_template.format(i=i, rel=rel, col=var, attr=attr, label=label, m_at = mat, unit=unit, value=hasv)
+						else:
+							scriptbuffer += writeCodebook(codebook, var, rel)
+						if countStuff < numStuff:
+							scriptbuffer += ',\n'
+						else:
+							scriptbuffer += '\n'
+				if countRels < numRels:
+					scriptbuffer = scriptbuffer[:-1]
+					scriptbuffer += ',\n'
+			if countEnts < numEnts:
+				scriptbuffer += '\t},\n'
+			else:
+				scriptbuffer += '\n'
+
+#WRITE THE OTHER STUFF
+		else:
+			rel = vals['??subject']
+			piece = conj.get(rel, '/attr/')
+			etype = str(vals['@type']).strip()
+			numRels = len(vals)
+			ec = ''
+			if 'sio:hasAttribute' in vals.keys():
+				ec = '"@if": "'
+				numAttrs = len(vals['sio:hasAttribute'].items())
+				countAttrs = 0
+				for var, deets in vals['sio:hasAttribute'].items():
+					if countAttrs == 0:
+						ec += entity_conditional.format(c='', prop=var)
+					else:
+						ec += entity_conditional.format(c=' or ', prop=var)
+					countAttrs += 1
+					if countAttrs == numAttrs:
+						ec += '",'
+			uri = subj_base_uri + conj[rel] + str(entity[2:]).upper()
+			i = '\t'*2
+			scriptbuffer += entity_template.format(i=i, entcond=ec, uri=uri, tp=etype, rel=rel, subj=subj_base_uri)
+			countRels = 0
+			for rel in vals.keys():
+				if rel in {'??subject', '@type', 'sio:hasRole'}:
+					countRels += 1
+					continue
+				else: 
+					countRels += 1
+					numStuff = len(vals[rel])
+					countStuff = 0
+					for var, deets in vals[rel].items():
+						countStuff += 1
+						if var not in codebook.keys():
+							i = '\t'*2
+							attr = ''
+							label = ''
+							unit = ''
+							hasv = hasv_template.format(i=i, col=var)
+							mat = ''
+							if 'rdfs:subClassOf' in deets.keys():
+								attr = str(deets['rdfs:subClassOf'])
+							if 'rdfs:label' in deets.keys():
+								label = str(deets['rdfs:label'])
+							if 'sio:hasUnit' in deets.keys():
+								unit = unit_template.format(i=i, unit=str(deets['sio:hasUnit']))
+							if 'sio:measuredAt' in deets.keys():
+								mat = mat_template.format(i=i, timepoint=tp.get(str(deets['sio:measuredAt'])))
+							scriptbuffer += relation_template.format(i=i, rel=rel, col=var, attr=attr, label=label, m_at = mat, unit=unit, value=hasv)
+						else:
+							scriptbuffer += writeCodebook(codebook, var, rel)
+						if countStuff < numStuff:
+							scriptbuffer += ',\n'
+						else:
+							scriptbuffer += '\n'
+			if countEnts < numEnts:
+				scriptbuffer += '\t},\n'
+			else:
+				scriptbuffer += '\n'
+
+
 	scriptbuffer += cl
 	scriptbuffer += "\n\n"
 	return scriptbuffer
 #/WRITETRANSFORMVALUE
 
 
+
+# Call this in the above method to write a codebook entry.
+# TAKES the codebook and a variable
+# RETURNS a formatted template string for that variable's codebook options
+def writeCodebook(cb, var, rel):
+	#i default=2
+	cb_start = '''
+{i}"{rel}": ['''
+
+	#i default=3
+	cb_template= '''\n{i}{{
+{i}\t"@if": "{{{{row.{col_f}}}}} == '{code}'",
+{i}\t"@id": "dataset:{{{{row.STUDYID}}}}/{{{{row.SUBJID|int}}}}/attr/{col}/{{{{row.get('{col_f}')}}}}",
+{i}\t"@type": ["{cls}"],
+{i}\t"sio:hasValue": [{{ "@value": "{lbl}" }}]
+{i}}},'''
+	
+	i = '\t'*2
+	cbstring = cb_start.format(i=i, rel=rel)
+
+	sub_book = cb[var]
+	i = '\t'*2
+	for code, info in sub_book.items():
+		col_f = var
+		label = str(info['sio:hasValue'])
+		cls = str(info['@type'])
+		if code.isdigit():
+			col_f = var + '|int'
+		else:
+			col_f = col_f.strip()
+		cbstring += cb_template.format(i=i, col=var, col_f=col_f, code=code, cls=cls, lbl=label)
+	cbstring = cbstring[:-1] #slice off last comma
+	cbstring += ']'
+	return cbstring
+
+
+
+
+#WRITE LOAD
+def writeLoad(fname):
+	suffix = fname.split('.')[-1].lower()
+	output_filetypes = {
+				"rdf" : '"default", "application/rdf+xml", "text/rdf"',
+				"xml" : '"default", "application/rdf+xml", "text/rdf"',
+				"ttl" : '"text/turtle", "application/turtle", "application/x-turtle"',
+				"nt" : "text/plain",
+				"n3" : "text/n3",
+				"trig" : "application/trig",
+				"json" : "application/json" }
+	try:
+		ftype = output_filetypes[suffix]
+	except KeyError:
+		print('Invalid or unsupported output type: ' + fname)
+		sys.exit()
+	scriptbuffer=''
+	ld = '''<{name}> a pv:File;
+\tdcterms:format {ftype};
+\tprov:wasGeneratedBy [
+\t\ta setl:Load;
+\t\tprov:used :transform ;
+\t].'''
+	load = ld.format(name=fname, ftype=ftype)
+	scriptbuffer += load
+	return scriptbuffer
+#/writeLoad()
 
 if __name__ == "__main__": main()
