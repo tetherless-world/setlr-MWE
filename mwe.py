@@ -1,10 +1,7 @@
 import pandas as pd
 import numpy as np
-import configparser
-import json, math
-import re
-import sys
-
+import configparser, json, math, re, sys
+import string
 
 def main():
 	if len(sys.argv) < 2:
@@ -145,6 +142,12 @@ def writeTransformContext(base_uri):
 #/WRITE TRANSFORM CONTEXT
 
 
+#STRING FILTER METHOD
+def stringFilter(inStr):
+	outStr = ''.join(filter(lambda x: x in string.printable, inStr))
+	return outStr
+
+
 #COMPILE SDD
 def compileSDD(codebook, dictionary, timeline):
 # TIMEPOINTS NEW
@@ -159,17 +162,17 @@ def compileSDD(codebook, dictionary, timeline):
 	current_var = ''
 	for cbrow in codebook.itertuples():
 		if pd.notnull(cbrow[1]): #reset current var if we're on a new one
-			current_var = cbrow[1]
+			current_var = stringFilter(cbrow[1])
 		if current_var not in cb_dict: #if this var isn't in the codebook yet, add a spot for it
 			cb_dict[current_var] = {}
 		if pd.isnull(cbrow[2]) and pd.isnull(cbrow[3]):
 			print('WARN: blank row: {}'.format(cbrow[0]))
 			continue
-		value_key = str(int(cbrow[2]))
+		value_key = stringFilter(str(int(cbrow[2])))
 		# (label, uri)
 		cb_dict[current_var][value_key] = {}
-		cb_dict[current_var][value_key]['sio:hasValue'] = cbrow[5]
-		cb_dict[current_var][value_key]['@type'] = cbrow[3]
+		cb_dict[current_var][value_key]['sio:hasValue'] = stringFilter(cbrow[5])
+		cb_dict[current_var][value_key]['@type'] = stringFilter(cbrow[3])
 
 	numrows = dictionary.shape[0]
 
@@ -183,7 +186,7 @@ def compileSDD(codebook, dictionary, timeline):
 	# row is META
 #	0:index ... 8:Entity 9:Role 10:Relation 11:inRelationTo 12:NewConcept ...
 		if row[1].startswith('??'):
-			conc = row[1]
+			conc = stringFilter(row[1])
 			# add new concept to dictionary if we don't have it yet
 			if conc not in sdd: 
 				if pd.isnull(conc):
@@ -191,16 +194,16 @@ def compileSDD(codebook, dictionary, timeline):
 				sdd[conc] = {}
 			# entity type needs to not be null
 			if pd.notnull(row[8]):
-				sdd[conc]['@type'] = row[8]
+				sdd[conc]['@type'] = stringFilter(row[8])
 			else:
 				print('WARN: entity {} missing type'.format(row[1]))
 			# it's okay if there's no role
 			if pd.notnull(row[9]):
-				sdd[conc]['sio:hasRole'] = row[9]
+				sdd[conc]['sio:hasRole'] = stringFilter(row[9])
 			# specify entity relation if there is one
 			if pd.notnull(row[11]):
 				if pd.notnull(row[10]):
-					sdd[conc][row[11]] = row[10]
+					sdd[conc][row[11]] = stringFilter(row[10])
 				else: #default relation
 					sdd[conc][row[11]] = 'sio:isRelatedTo'
 	#/META
@@ -213,7 +216,7 @@ def compileSDD(codebook, dictionary, timeline):
 			#add new concept to dictionary if we don't have it yet
 			attr = 'sio:hasAttribute'
 			if pd.notnull(row[10]):
-				attr = row[10]
+				attr = stringFilter(row[10])
 			if conc not in sdd: 
 				if pd.isnull(conc):
 					conc = 'NULL'
@@ -223,18 +226,18 @@ def compileSDD(codebook, dictionary, timeline):
 			if pd.isnull(row[1]):
 				print('WARN: unspecified variable row in SDD: {}'.format(row[0]))
 				continue
-			col_name = row[1]
+			col_name = stringFilter(row[1])
 			sdd[conc][attr][col_name] = {}
 			if pd.notnull(row[4]):
-				sdd[conc][attr][col_name]['rdfs:subClassOf'] = row[4]
+				sdd[conc][attr][col_name]['rdfs:subClassOf'] = stringFilter(row[4])
 #			else:
 #				print("WARN: untyped variable {}".format(row[1]))
-			if pd.notnull(row[2]):
-				sdd[conc][attr][col_name]['rdfs:label'] = row[2]
+#			if pd.notnull(row[2]):
+#				sdd[conc][attr][col_name]['rdfs:label'] = stringFilter(row[2])
 			if pd.notnull(row[6]):
-				sdd[conc][attr][col_name]['sio:hasUnit'] = row[6]
+				sdd[conc][attr][col_name]['sio:hasUnit'] = stringFilter(row[6])
 			if pd.notnull(row[7]):
-				sdd[conc][attr][col_name]['sio:measuredAt'] = row[7]
+				sdd[conc][attr][col_name]['sio:measuredAt'] = stringFilter(row[7])
 			
 	#/REGULAR
 	return cb_dict, sdd, tl_dict
@@ -277,9 +280,10 @@ def writeTransformValue(codebook, dictionary, timeline):
 {i}{{
 {i}\t"@if": "'{col}' in row",
 {i}\t"@id": "dataset:{{{{row['STUDYID']}}}}/{{{{row['SUBJID']|int}}}}/attr/{col}",
-{i}\t"@type": ["sio:Attribute", "hbgd:HBGDkiConcept", "hbgd:Variable", "{attr}" ],
-{i}\t"rdfs:label": "{label}"{m_at}{unit}{value}
+{i}\t"@type": ["sio:Attribute", "hbgd:HBGDkiConcept", "hbgd:Variable", "{attr}" ]
+{i}\t{m_at}{unit}{value}
 {i}}}]'''
+#{i}\t"rdfs:label": "{label}"{m_at}{unit}{value}
 
 	unit_template =''',\n{i}\t"sio:hasUnit": {{ "@value": "{unit}" }}'''
 
@@ -340,13 +344,13 @@ def writeTransformValue(codebook, dictionary, timeline):
 							mat = ''
 							if 'rdfs:subClassOf' in deets.keys():
 								attr = str(deets['rdfs:subClassOf'])
-							if 'rdfs:label' in deets.keys():
-								label = str(deets['rdfs:label'])
+							#if 'rdfs:label' in deets.keys():
+							#	label = str(deets['rdfs:label'])
 							if 'sio:hasUnit' in deets.keys():
 								unit = unit_template.format(i=i, unit=str(deets['sio:hasUnit']))
 							if 'sio:measuredAt' in deets.keys():
 								mat = mat_template.format(i=i, timepoint=tp.get(str(deets['sio:measuredAt']), 'UNKNOWN'))
-							scriptbuffer += relation_template.format(i=i, rel=rel, col=var, attr=attr, label=label, m_at = mat, unit=unit, value=hasv)
+							scriptbuffer += relation_template.format(i=i, rel=rel, col=var, attr=attr, m_at = mat, unit=unit, value=hasv)
 						else:
 							scriptbuffer += writeCodebook(codebook, var, rel)
 						if countStuff < numStuff:
@@ -403,13 +407,13 @@ def writeTransformValue(codebook, dictionary, timeline):
 							mat = ''
 							if 'rdfs:subClassOf' in deets.keys():
 								attr = str(deets['rdfs:subClassOf'])
-							if 'rdfs:label' in deets.keys():
-								label = str(deets['rdfs:label'])
+							#if 'rdfs:label' in deets.keys():
+							#	label = str(deets['rdfs:label'])
 							if 'sio:hasUnit' in deets.keys():
 								unit = unit_template.format(i=i, unit=str(deets['sio:hasUnit']))
 							if 'sio:measuredAt' in deets.keys():
 								mat = mat_template.format(i=i, timepoint=tp.get(str(deets['sio:measuredAt'])))
-							scriptbuffer += relation_template.format(i=i, rel=rel, col=var, attr=attr, label=label, m_at = mat, unit=unit, value=hasv)
+							scriptbuffer += relation_template.format(i=i, rel=rel, col=var, attr=attr, m_at = mat, unit=unit, value=hasv)
 						else:
 							scriptbuffer += writeCodebook(codebook, var, rel)
 						if countStuff < numStuff:
